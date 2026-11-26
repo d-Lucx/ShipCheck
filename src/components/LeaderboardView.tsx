@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowUpRight, Search } from 'lucide-react';
+import { ArrowUpRight, Search, X } from 'lucide-react';
 import {
   getTierColor,
   type AuditRecord,
@@ -17,13 +17,13 @@ interface LeaderboardViewProps {
 type TierFilter = 'All' | Tier;
 type SortOption = 'score' | 'lowest_slop' | 'recent';
 
-const TIER_FILTERS: TierFilter[] = [
-  'All',
-  'Apex Craft',
-  'Ship-Ready',
-  'Weekend Hackathon',
-  'Certified AI Slop',
-  'Vaporware',
+const TIER_OPTIONS: { value: TierFilter; label: string }[] = [
+  { value: 'All', label: 'All Score Tiers' },
+  { value: 'Apex Craft', label: 'Apex Craft (90–100)' },
+  { value: 'Ship-Ready', label: 'Ship-Ready (75–89)' },
+  { value: 'Weekend Hackathon', label: 'Weekend Hackathon (50–74)' },
+  { value: 'Certified AI Slop', label: 'Certified AI Slop (25–49)' },
+  { value: 'Vaporware', label: 'Vaporware (0–24)' },
 ];
 
 function formatDate(iso: string): string {
@@ -45,7 +45,7 @@ export function LeaderboardView({
   const [tierFilter, setTierFilter] = useState<TierFilter>('All');
   const [sortBy, setSortBy] = useState<SortOption>('score');
   const [hallOfShame, setHallOfShame] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [repoSearch, setRepoSearch] = useState('');
 
   const summary = useMemo(() => {
     if (audits.length === 0) {
@@ -68,7 +68,7 @@ export function LeaderboardView({
   }, [audits]);
 
   const filteredAudits = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = repoSearch.trim().toLowerCase();
     return audits
       .filter((audit) => {
         if (hallOfShame) {
@@ -78,9 +78,8 @@ export function LeaderboardView({
         } else if (tierFilter !== 'All' && audit.tier !== tierFilter) {
           return false;
         }
-        if (q) {
-          const hay = `${audit.repoSlug} ${audit.roastVerdict} ${audit.tier} ${audit.commitSha}`.toLowerCase();
-          if (!hay.includes(q)) return false;
+        if (q && !audit.repoSlug.toLowerCase().includes(q)) {
+          return false;
         }
         return true;
       })
@@ -101,7 +100,9 @@ export function LeaderboardView({
         }
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
-  }, [audits, hallOfShame, tierFilter, searchQuery, sortBy]);
+  }, [audits, hallOfShame, tierFilter, repoSearch, sortBy]);
+
+  const hasActiveFilters = hallOfShame || tierFilter !== 'All' || repoSearch.trim().length > 0;
 
   return (
     <div className="max-w-[1200px] mx-auto px-6 py-10 space-y-8">
@@ -188,60 +189,52 @@ export function LeaderboardView({
 
       {/* Filter & Sort Toolbar */}
       <section className="space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div
-            role="tablist"
-            aria-label="Filter leaderboard by tier"
-            className="flex items-center gap-1 p-1 bg-[#F1F5F9] rounded-md overflow-x-auto"
-          >
-            {TIER_FILTERS.map((tier) => {
-              const active = !hallOfShame && tierFilter === tier;
-              return (
-                <button
-                  key={tier}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => {
-                    setHallOfShame(false);
-                    setTierFilter(tier);
-                  }}
-                  className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                    active
-                      ? 'bg-white text-[#0F172A] shadow-xs'
-                      : 'text-[#64748B] hover:text-[#0F172A]'
-                  }`}
-                >
-                  {tier}
-                </button>
-              );
-            })}
+        <div className="bg-white border border-[#E2E8F0] rounded-lg p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          {/* Repository Name Search Input */}
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="w-4 h-4 text-[#94A3B8] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="search"
+              aria-label="Filter repositories by name"
+              value={repoSearch}
+              onChange={(e) => setRepoSearch(e.target.value)}
+              placeholder="Filter repositories by name (e.g. owner/repo)..."
+              className="w-full pl-9 pr-8 py-2 text-xs font-mono bg-[#F8FAFC] border border-[#CBD5E1] rounded-md text-[#0F172A] placeholder:text-[#94A3B8] focus:bg-white focus:outline-none focus:border-[#0F172A] transition-colors"
+            />
+            {repoSearch && (
+              <button
+                type="button"
+                aria-label="Clear repository search"
+                onClick={() => setRepoSearch('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#94A3B8] hover:text-[#0F172A] cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setHallOfShame((prev) => !prev)}
-              className={`px-3 py-2 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                hallOfShame
-                  ? 'bg-[#FEF2F2] text-[#DC2626] border-[#FECACA]'
-                  : 'bg-white text-[#475569] border-[#CBD5E1] hover:text-[#0F172A]'
-              }`}
-            >
-              {hallOfShame ? 'Hall of Shame: Active' : 'Hall of Shame Filter'}
-            </button>
-
-            <label className="relative flex items-center">
-              <Search className="w-3.5 h-3.5 text-[#94A3B8] absolute left-3 pointer-events-none" />
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search repo or verdict..."
-                className="pl-8 pr-3 py-2 text-xs bg-white border border-[#CBD5E1] rounded-md text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#0F172A] w-52"
-              />
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Score Tier Category Dropdown */}
+            <label className="flex items-center gap-2 text-xs text-[#64748B]">
+              <span className="whitespace-nowrap shrink-0">Score Tier</span>
+              <select
+                aria-label="Filter by score tier"
+                value={hallOfShame ? 'All' : tierFilter}
+                onChange={(e) => {
+                  setHallOfShame(false);
+                  setTierFilter(e.target.value as TierFilter);
+                }}
+                className="px-3 py-2 text-xs font-medium bg-white border border-[#CBD5E1] rounded-md text-[#0F172A] focus:outline-none focus:border-[#0F172A] cursor-pointer"
+              >
+                {TIER_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
             </label>
 
+            {/* Sort Order Dropdown */}
             <select
               aria-label="Sort leaderboard"
               value={sortBy}
@@ -252,7 +245,39 @@ export function LeaderboardView({
               <option value="lowest_slop">Sort: Lowest Slop</option>
               <option value="recent">Sort: Recently Audited</option>
             </select>
+
+            {/* Hall of Shame Toggle */}
+            <button
+              type="button"
+              onClick={() => setHallOfShame((prev) => !prev)}
+              className={`px-3 py-2 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                hallOfShame
+                  ? 'bg-[#FEF2F2] text-[#DC2626] border-[#FECACA]'
+                  : 'bg-white text-[#475569] border-[#CBD5E1] hover:text-[#0F172A]'
+              }`}
+            >
+              {hallOfShame ? 'Hall of Shame: Active' : 'Hall of Shame'}
+            </button>
           </div>
+        </div>
+
+        <div className="flex items-center justify-between text-xs text-[#64748B] px-1">
+          <span className="font-mono tabular-nums">
+            Showing {filteredAudits.length} of {audits.length} public receipts
+          </span>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={() => {
+                setHallOfShame(false);
+                setTierFilter('All');
+                setRepoSearch('');
+              }}
+              className="text-[#2563EB] hover:underline font-medium cursor-pointer"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
 
         {/* Precision Leaderboard Table */}
@@ -283,17 +308,17 @@ export function LeaderboardView({
                   <tr>
                     <td colSpan={7} className="py-12 px-6 text-center">
                       <p className="text-sm font-medium text-[#0F172A]">
-                        No audit receipts match the active filters
+                        No repositories match the active search or score tier filter
                       </p>
                       <p className="text-xs text-[#64748B] mt-1 mb-4">
-                        Reset your tier filter or run a fresh two-pass audit in the Audit Lab.
+                        Reset your filters or audit a new repository in the Audit Lab.
                       </p>
                       <button
                         type="button"
                         onClick={() => {
                           setHallOfShame(false);
                           setTierFilter('All');
-                          setSearchQuery('');
+                          setRepoSearch('');
                         }}
                         className="px-4 py-2 text-xs font-medium bg-[#0F172A] text-white rounded-md hover:bg-[#1E293B] transition-colors cursor-pointer"
                       >

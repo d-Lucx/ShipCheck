@@ -220,11 +220,32 @@ async function startServer(): Promise<void> {
   app.get('/api/badge/:owner/:repo', async (req, res) => {
     const owner = String(req.params.owner || '');
     const repo = String(req.params.repo || '');
-    const audit = await fetchLatestPublicAuditForRepo(owner, repo);
+    const rawStyle = typeof req.query.style === 'string' ? req.query.style : 'flat';
+    const style =
+      rawStyle === 'flat-square' || rawStyle === 'for-the-badge' ? rawStyle : 'flat';
+    const showTier = req.query.showTier !== 'false';
+    const label = typeof req.query.label === 'string' ? req.query.label.slice(0, 24) : 'ShipCheck';
+    const auditIdParam = typeof req.query.auditId === 'string' ? req.query.auditId : '';
+
+    const audit =
+      (auditIdParam ? await fetchPublicAuditById(auditIdParam) : null) ??
+      (await fetchLatestPublicAuditForRepo(owner, repo));
 
     const svg = audit
-      ? renderBadgeSvg({ score: audit.overallScore, tier: audit.tier })
-      : renderBadgeSvg({ score: null, tier: 'Unaudited' });
+      ? renderBadgeSvg({
+          score: audit.overallScore,
+          tier: audit.tier,
+          style,
+          label,
+          showTier,
+        })
+      : renderBadgeSvg({
+          score: null,
+          tier: 'Unaudited',
+          style,
+          label,
+          showTier,
+        });
 
     res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=300');

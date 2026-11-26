@@ -33,13 +33,27 @@ function wrapText(text: string, maxCharsPerLine: number, maxLines: number): stri
   return lines;
 }
 
+export type BadgeStyle = 'flat' | 'flat-square' | 'for-the-badge';
+
 export function renderBadgeSvg(params: {
   score: number | null;
   tier: string;
+  style?: BadgeStyle;
+  label?: string;
+  showTier?: boolean;
 }): string {
-  const leftLabel = 'ShipCheck';
-  const rightLabel =
-    params.score !== null ? `${params.score}/100 · ${params.tier}` : 'Unaudited';
+  const style: BadgeStyle = params.style ?? 'flat';
+  const showTier = params.showTier !== false;
+  const rawLabel = (params.label?.trim() || 'ShipCheck').slice(0, 24);
+  const leftLabel = style === 'for-the-badge' ? rawLabel.toUpperCase() : rawLabel;
+
+  const rawRight =
+    params.score !== null
+      ? showTier
+        ? `${params.score}/100 · ${params.tier}`
+        : `${params.score}/100`
+      : 'Unaudited';
+  const rightLabel = style === 'for-the-badge' ? rawRight.toUpperCase() : rawRight;
 
   const tierColors: Record<string, string> = {
     'Apex Craft': '#15803D',
@@ -50,23 +64,32 @@ export function renderBadgeSvg(params: {
   };
   const accent = tierColors[params.tier] ?? '#475569';
 
-  const leftWidth = 78;
-  const rightWidth = Math.max(110, Math.round(rightLabel.length * 6.8 + 22));
+  const isForTheBadge = style === 'for-the-badge';
+  const height = isForTheBadge ? 28 : 22;
+  const rx = style === 'flat-square' || isForTheBadge ? 0 : 4;
+  const fontSize = isForTheBadge ? 10.5 : 11;
+  const charWidth = isForTheBadge ? 7.6 : 6.8;
+  const padX = isForTheBadge ? 22 : 16;
+
+  const leftWidth = Math.max(70, Math.round(leftLabel.length * charWidth + padX));
+  const rightWidth = Math.max(72, Math.round(rightLabel.length * charWidth + padX));
   const totalWidth = leftWidth + rightWidth;
+  const textY = isForTheBadge ? 17.5 : 14.8;
+  const letterSpacing = isForTheBadge ? '0.6' : '0';
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="24" role="img" aria-label="${escapeXml(leftLabel)}: ${escapeXml(rightLabel)}">
+<svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="${height}" role="img" aria-label="${escapeXml(leftLabel)}: ${escapeXml(rightLabel)}">
   <title>${escapeXml(leftLabel)}: ${escapeXml(rightLabel)}</title>
   <clipPath id="r">
-    <rect width="${totalWidth}" height="24" rx="4" fill="#fff"/>
+    <rect width="${totalWidth}" height="${height}" rx="${rx}" fill="#fff"/>
   </clipPath>
   <g clip-path="url(#r)">
-    <rect width="${leftWidth}" height="24" fill="#0F172A"/>
-    <rect x="${leftWidth}" width="${rightWidth}" height="24" fill="${accent}"/>
+    <rect width="${leftWidth}" height="${height}" fill="#0F172A"/>
+    <rect x="${leftWidth}" width="${rightWidth}" height="${height}" fill="${accent}"/>
   </g>
-  <g fill="#fff" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="11" font-weight="600">
-    <text x="${Math.round(leftWidth / 2)}" y="15.5">${escapeXml(leftLabel)}</text>
-    <text x="${leftWidth + Math.round(rightWidth / 2)}" y="15.5">${escapeXml(rightLabel)}</text>
+  <g fill="#fff" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="${fontSize}" font-weight="${isForTheBadge ? '700' : '600'}" letter-spacing="${letterSpacing}">
+    <text x="${Math.round(leftWidth / 2)}" y="${textY}">${escapeXml(leftLabel)}</text>
+    <text x="${leftWidth + Math.round(rightWidth / 2)}" y="${textY}">${escapeXml(rightLabel)}</text>
   </g>
 </svg>`;
 }

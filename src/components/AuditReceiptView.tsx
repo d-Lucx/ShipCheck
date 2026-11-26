@@ -1,11 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Check,
   ChevronDown,
   ChevronUp,
   Copy,
+  Download,
   ExternalLink,
+  Loader2,
+  Share2,
   Trash2,
 } from 'lucide-react';
 import {
@@ -21,7 +24,9 @@ import {
   deleteAuditFromFirestore,
   toggleAuditVisibility,
 } from '../lib/auditStore.ts';
+import { exportAuditReceiptPdf } from '../lib/pdfReport.ts';
 import { PillarRadarChart } from './PillarRadarChart.tsx';
+import { ReceiptShareSection } from './ReceiptShareSection.tsx';
 
 interface AuditReceiptViewProps {
   audit: AuditRecord;
@@ -42,6 +47,19 @@ function isSafeExternalUrl(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
 }
 
+function upsertMetaTag(attr: 'property' | 'name', key: string, content: string): string | null {
+  if (typeof document === 'undefined') return null;
+  let el = document.querySelector<HTMLMetaElement>(`meta[${attr}="${key}"]`);
+  const previous = el?.getAttribute('content') ?? null;
+  if (!el) {
+    el = document.createElement('meta');
+    el.setAttribute(attr, key);
+    document.head.appendChild(el);
+  }
+  el.setAttribute('content', content);
+  return previous;
+}
+
 export function AuditReceiptView({
   audit,
   onBack,
@@ -49,18 +67,58 @@ export function AuditReceiptView({
   onUpdated,
 }: AuditReceiptViewProps) {
   const { user, signInWithGoogle } = useAuth();
+  const captureRef = useRef<HTMLDivElement | null>(null);
   const [expandedPillar, setExpandedPillar] = useState<PillarKey | null>('functionality');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   const tierColors = getTierColor(audit.tier);
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const [owner, repo] = audit.repoSlug.split('/');
   const badgePath = `/api/badge/${encodeURIComponent(owner || 'repo')}/${encodeURIComponent(repo || 'app')}`;
   const ogPath = `/api/og/${encodeURIComponent(audit.id)}`;
+  const ogImageUrl = `${origin}${ogPath}`;
   const receiptUrl = `${origin}/r/${audit.id}`;
-  const badgeMarkdown = `[![ShipCheck](${origin}${badgePath})](${receiptUrl})`;
+  const defaultBadgeMarkdown = `[![ShipCheck: ${audit.overallScore}/100 (${audit.tier})](${origin}${badgePath}?auditId=${encodeURIComponent(audit.id)})](${receiptUrl})`;
+
+  const shareTitle = `${audit.repoSlug} — ${audit.overallScore}/100 (${audit.tier}) | ShipCheck`;
+  const xShareText = `${audit.repoSlug} scored ${audit.overallScore}/100 (${audit.tier}) on ShipCheck.\n\n"${audit.roastVerdict}"`;
+  const linkedInShareText = `Verified ShipCheck Benchmark for ${audit.repoSlug}: ${audit.overallScore}/100 (${audit.tier}) · ${audit.slopHitCount} slop hits.\n\nVerdict: "${audit.roastVerdict}"\nOG Card: ${ogImageUrl}`;
+
+  const xIntentUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(xShareText)}&url=${encodeURIComponent(receiptUrl)}`;
+  const linkedInIntentUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(receiptUrl)}`;
+
+  const ogMetaTagSnippet = [
+    `<meta property="og:title" content="${shareTitle.replace(/"/g, '&quot;')}" />`,
+    `<meta property="og:description" content="${audit.roastVerdict.replace(/"/g, '&quot;')}" />`,
+    `<meta property="og:image" content="${ogImageUrl}" />`,
+    `<meta property="og:image:width" content="1200" />`,
+    `<meta property="og:image:height" content="630" />`,
+    `<meta name="twitter:card" content="summary_large_image" />`,
+    `<meta name="twitter:image" content="${ogImageUrl}" />`,
+  ].join('\n');
+
+  // Synchronize document OpenGraph meta tags for this receipt
+  useEffect(() => {
+    const prevTitle = document.title;
+    document.title = shareTitle;
+    const prevOgTitle = upsertMetaTag('property', 'og:title', shareTitle);
+    const prevOgDesc = upsertMetaTag('property', 'og:description', audit.roastVerdict);
+    const prevOgImg = upsertMetaTag('property', 'og:image', ogImageUrl);
+    const prevOgUrl = upsertMetaTag('property', 'og:url', receiptUrl);
+    const prevTwImg = upsertMetaTag('name', 'twitter:image', ogImageUrl);
+
+    return () => {
+      document.title = prevTitle;
+      if (prevOgTitle !== null) upsertMetaTag('property', 'og:title', prevOgTitle);
+      if (prevOgDesc !== null) upsertMetaTag('property', 'og:description', prevOgDesc);
+      if (prevOgImg !== null) upsertMetaTag('property', 'og:image', prevOgImg);
+      if (prevOgUrl !== null) upsertMetaTag('property', 'og:url', prevOgUrl);
+      if (prevTwImg !== null) upsertMetaTag('name', 'twitter:image', prevTwImg);
+    };
+  }, [shareTitle, audit.roastVerdict, ogImageUrl, receiptUrl]);
 
   const isOwner = Boolean(user && audit.authorUid && user.uid === audit.authorUid && !audit.isReference);
 
@@ -69,8 +127,68 @@ export function AuditReceiptView({
       await navigator.clipboard.writeText(text);
       setCopiedKey(key);
       setTimeout(() => setCopiedKey(null), 1800);
+      return true;
     } catch {
       setActionStatus('Clipboard permission denied in this browser.');
+      return false;
+    }
+  };
+
+  const handleWebShare = async (channel: 'native' | 'x' | 'linkedin') => {
+    setActionStatus(null);
+    const payload: ShareData =
+      channel === 'x'
+        ? { title: shareTitle, text: xShareText, url: receiptUrl }
+        : channel === 'linkedin'
+          ? { title: shareTitle, text: linkedInShareText, url: receiptUrl }
+          : { title: shareTitle, text: xShareText, url: receiptUrl };
+
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share(payload);
+        setActionStatus(
+          channel === 'x'
+            ? 'Shared X post summary via Web Share API.'
+            : channel === 'linkedin'
+              ? 'Shared LinkedIn summary via Web Share API.'
+              : 'Receipt shared via Web Share API.'
+        );
+        return;
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return;
+        }
+        // Fall through to clipboard copy fallback if Web Share is restricted in iframe
+      }
+    }
+
+    const fallbackText =
+      channel === 'linkedin'
+        ? `${linkedInShareText}\n${receiptUrl}`
+        : `${xShareText}\n${receiptUrl}`;
+    const copied = await copyText(`share-${channel}`, fallbackText);
+    if (copied) {
+      setActionStatus(
+        channel === 'x'
+          ? 'Web Share unavailable here — copied X post and receipt URL to clipboard.'
+          : channel === 'linkedin'
+            ? 'Web Share unavailable here — copied LinkedIn post and OG card URL to clipboard.'
+            : 'Web Share unavailable here — copied receipt summary and URL to clipboard.'
+      );
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!captureRef.current || exportingPdf) return;
+    setExportingPdf(true);
+    setActionStatus(null);
+    try {
+      const filename = await exportAuditReceiptPdf(audit, captureRef.current);
+      setActionStatus(`Downloaded offline PDF report (${filename}).`);
+    } catch (err) {
+      setActionStatus(err instanceof Error ? err.message : 'PDF export failed.');
+    } finally {
+      setExportingPdf(false);
     }
   };
 
@@ -186,6 +304,49 @@ export function AuditReceiptView({
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
             <button
               type="button"
+              disabled={exportingPdf}
+              onClick={() => void handleDownloadPdf()}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-[#0F172A] text-white rounded-md hover:bg-[#1E293B] disabled:opacity-60 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              {exportingPdf ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Exporting PDF...
+                </>
+              ) : (
+                <>
+                  <Download className="w-3.5 h-3.5" />
+                  Download as PDF
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleWebShare('native')}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-white border border-[#CBD5E1] text-[#0F172A] rounded-md hover:bg-[#F8FAFC] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              Share Receipt
+            </button>
+            <button
+              type="button"
+              onClick={() => void copyText('header-badge', defaultBadgeMarkdown)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-white border border-[#CBD5E1] text-[#0F172A] rounded-md hover:bg-[#F8FAFC] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              {copiedKey === 'header-badge' ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-[#16A34A]" />
+                  Copied Badge MD
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  Copy README Badge
+                </>
+              )}
+            </button>
+            <button
+              type="button"
               onClick={() => void copyText('url', receiptUrl)}
               className="px-3.5 py-2 text-xs font-medium bg-white border border-[#CBD5E1] text-[#0F172A] rounded-md hover:bg-[#F8FAFC] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
@@ -232,6 +393,8 @@ export function AuditReceiptView({
         )}
       </div>
 
+      {/* Capturable Offline Report Region: Audit Summary + Radar Chart + Pass 1 Telemetry */}
+      <div ref={captureRef} className="space-y-8">
       {/* Balanced 2-Column Overview: Score + Verdict | Radar Chart */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
         <div className="lg:col-span-6 bg-white border border-[#E2E8F0] rounded-lg p-6 flex flex-col justify-between gap-6">
@@ -418,6 +581,7 @@ export function AuditReceiptView({
           </div>
         )}
       </section>
+      </div>
 
       {/* Expandable 5-Pillar Evidence Breakdown */}
       <section className="bg-white border border-[#E2E8F0] rounded-lg divide-y divide-[#E2E8F0]">
@@ -508,85 +672,23 @@ export function AuditReceiptView({
         })}
       </section>
 
-      {/* README Badge & OpenGraph Social Receipt Preview */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-        <div className="lg:col-span-5 bg-white border border-[#E2E8F0] rounded-lg p-6 flex flex-col justify-between gap-5">
-          <div className="space-y-3">
-            <h2 className="text-base font-semibold text-[#0F172A]">
-              Tamper-Proof README Badge
-            </h2>
-            <p className="text-xs text-[#64748B] leading-relaxed">
-              Served live from <code className="font-mono text-[#0F172A]">{badgePath}</code> with
-              tier color coding and 5-minute edge caching.
-            </p>
-            <div className="py-4 px-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-md flex items-center justify-center">
-              <img
-                src={badgePath}
-                alt={`ShipCheck badge for ${audit.repoSlug}`}
-                referrerPolicy="no-referrer"
-                className="h-6"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-[#475569]">Markdown Snippet</span>
-              <button
-                type="button"
-                onClick={() => void copyText('badge', badgeMarkdown)}
-                className="inline-flex items-center gap-1 text-xs font-medium text-[#2563EB] hover:underline cursor-pointer"
-              >
-                {copiedKey === 'badge' ? (
-                  <>
-                    <Check className="w-3.5 h-3.5" />
-                    Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    Copy Markdown
-                  </>
-                )}
-              </button>
-            </div>
-            <pre className="p-3 bg-[#0F172A] text-[#E2E8F0] rounded-md text-[11px] font-mono overflow-x-auto">
-              {badgeMarkdown}
-            </pre>
-          </div>
-        </div>
-
-        <div className="lg:col-span-7 bg-white border border-[#E2E8F0] rounded-lg p-6 space-y-3">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h2 className="text-base font-semibold text-[#0F172A]">
-                OpenGraph Receipt Card (1200×630)
-              </h2>
-              <p className="text-xs text-[#64748B]">
-                Live server-rendered social preview from{' '}
-                <code className="font-mono text-[#0F172A]">{ogPath}</code>
-              </p>
-            </div>
-            <a
-              href={ogPath}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs font-medium text-[#2563EB] hover:underline whitespace-nowrap shrink-0"
-            >
-              Open SVG
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
-          </div>
-          <div className="border border-[#E2E8F0] rounded-md overflow-hidden bg-[#0B1120]">
-            <img
-              src={ogPath}
-              alt={`OpenGraph receipt card for ${audit.repoSlug}`}
-              referrerPolicy="no-referrer"
-              className="w-full h-auto block"
-            />
-          </div>
-        </div>
-      </section>
+      <ReceiptShareSection
+        auditId={audit.id}
+        repoSlug={audit.repoSlug}
+        overallScore={audit.overallScore}
+        tier={audit.tier}
+        origin={origin}
+        receiptUrl={receiptUrl}
+        badgePath={badgePath}
+        ogPath={ogPath}
+        ogImageUrl={ogImageUrl}
+        ogMetaTagSnippet={ogMetaTagSnippet}
+        xIntentUrl={xIntentUrl}
+        linkedInIntentUrl={linkedInIntentUrl}
+        copiedKey={copiedKey}
+        onCopy={(key, text) => void copyText(key, text)}
+        onWebShare={(channel) => void handleWebShare(channel)}
+      />
     </div>
   );
 }
