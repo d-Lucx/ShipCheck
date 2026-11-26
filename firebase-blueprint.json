@@ -1,0 +1,196 @@
+{
+  "entities": {
+    "Audit": {
+      "title": "Audit",
+      "description": "Tamper-evident two-pass benchmark receipt tied to a repository slug, commit SHA, and SHA-256 bundle fingerprint.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique audit identifier."
+        },
+        "authorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the user who published this audit receipt."
+        },
+        "repoSlug": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 140,
+          "pattern": "^[a-zA-Z0-9_.\\-]+\\/[a-zA-Z0-9_.\\-]+$",
+          "description": "Repository identifier in owner/repo format."
+        },
+        "commitSha": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 40,
+          "pattern": "^[a-fA-F0-9]{7,40}$",
+          "description": "Git commit SHA evaluated in this audit."
+        },
+        "liveUrl": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Optional deployed URL probed during Pass 1."
+        },
+        "bundleHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 tamper-evident fingerprint of commit SHA, Pass 1 metrics, and file manifest."
+        },
+        "overallScore": {
+          "type": "integer",
+          "description": "Deterministically calculated weighted score from 0 to 100."
+        },
+        "tier": {
+          "type": "string",
+          "enum": [
+            "Apex Craft",
+            "Ship-Ready",
+            "Weekend Hackathon",
+            "Certified AI Slop",
+            "Vaporware"
+          ],
+          "description": "Deterministic tier mapped from overallScore."
+        },
+        "roastVerdict": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 280,
+          "description": "Sharp, constructive 1-sentence verdict summarizing core strength and biggest flaw."
+        },
+        "pillarScores": {
+          "type": "object",
+          "description": "Individual 0-100 scores for functionality, usefulness, anti_slop, creativity, and marketability."
+        },
+        "fullReport": {
+          "type": "object",
+          "description": "Complete Zod-validated Pass 1 deterministic metrics and Pass 2 cited pillar evidence."
+        },
+        "slopHitCount": {
+          "type": "integer",
+          "description": "Total deterministic slop lexicon hits recorded in Pass 1."
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Whether this receipt is published to the public ShipCheck leaderboard."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of audit publication."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest visibility update."
+        }
+      },
+      "required": [
+        "id",
+        "authorUid",
+        "repoSlug",
+        "commitSha",
+        "liveUrl",
+        "bundleHash",
+        "overallScore",
+        "tier",
+        "roastVerdict",
+        "pillarScores",
+        "fullReport",
+        "slopHitCount",
+        "isPublic",
+        "createdAt"
+      ]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private user account profile isolated to the authenticated owner.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254,
+          "format": "email"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "displayName", "createdAt"]
+    },
+    "RepoClaim": {
+      "title": "RepoClaim",
+      "description": "Record linking an authenticated user to a repository slug backed by an existing audit.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "repoSlug": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 140,
+          "pattern": "^[a-zA-Z0-9_.\\-]+\\/[a-zA-Z0-9_.\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "auditId": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "repoSlug", "ownerUid", "auditId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/audits/{auditId}": {
+      "schema": { "$ref": "#/entities/Audit" },
+      "description": "Published and private tamper-evident ShipCheck audit receipts."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-isolated user profiles containing email PII."
+    },
+    "/repoClaims/{claimId}": {
+      "schema": { "$ref": "#/entities/RepoClaim" },
+      "description": "User repository ownership claims referencing verified audit receipts."
+    }
+  }
+}

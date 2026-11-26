@@ -1,0 +1,6 @@
+{
+  "name": "ShipCheck",
+  "description": "Objective, verifiable software and product benchmark combining deterministic static analysis, calibrated multimodal LLM auditing, CLI/CI gating, SVG badges, and a public receipt leaderboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,196 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidScore(val) {
+      return val is int && val >= 0 && val <= 100;
+    }
+
+    function isValidTier(tier) {
+      return tier is string && tier.size() >= 1 && tier.size() <= 32 &&
+        tier in ['Apex Craft', 'Ship-Ready', 'Weekend Hackathon', 'Certified AI Slop', 'Vaporware'];
+    }
+
+    function isValidPillarScores(scores) {
+      return scores is map &&
+        scores.keys().hasAll(['functionality', 'usefulness', 'anti_slop', 'creativity', 'marketability']) &&
+        scores.keys().hasOnly(['functionality', 'usefulness', 'anti_slop', 'creativity', 'marketability']) &&
+        isValidScore(scores.functionality) &&
+        isValidScore(scores.usefulness) &&
+        isValidScore(scores.anti_slop) &&
+        isValidScore(scores.creativity) &&
+        isValidScore(scores.marketability);
+    }
+
+    function isValidAudit(data) {
+      return data is map &&
+        data.keys().hasAll([
+          'id', 'authorUid', 'repoSlug', 'commitSha', 'liveUrl', 'bundleHash',
+          'overallScore', 'tier', 'roastVerdict', 'pillarScores', 'fullReport',
+          'slopHitCount', 'isPublic', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'authorUid', 'repoSlug', 'commitSha', 'liveUrl', 'bundleHash',
+          'overallScore', 'tier', 'roastVerdict', 'pillarScores', 'fullReport',
+          'slopHitCount', 'isPublic', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id.size() >= 4 &&
+        isValidId(data.authorUid) &&
+        data.authorUid == request.auth.uid &&
+        data.repoSlug is string && data.repoSlug.size() >= 3 && data.repoSlug.size() <= 140 &&
+        data.repoSlug.matches('^[a-zA-Z0-9_.\\-]+\\/[a-zA-Z0-9_.\\-]+$') &&
+        data.commitSha is string && data.commitSha.size() >= 7 && data.commitSha.size() <= 40 &&
+        data.commitSha.matches('^[a-fA-F0-9]{7,40}$') &&
+        data.liveUrl is string && data.liveUrl.size() <= 512 &&
+        (data.liveUrl == '' || data.liveUrl.matches('^https?://.*')) &&
+        data.bundleHash is string && data.bundleHash.size() == 64 &&
+        data.bundleHash.matches('^[a-f0-9]{64}$') &&
+        isValidScore(data.overallScore) &&
+        isValidTier(data.tier) &&
+        data.roastVerdict is string && data.roastVerdict.size() >= 10 && data.roastVerdict.size() <= 280 &&
+        isValidPillarScores(data.pillarScores) &&
+        data.fullReport is map && data.fullReport.keys().size() <= 12 &&
+        data.slopHitCount is int && data.slopHitCount >= 0 && data.slopHitCount <= 10000 &&
+        data.isPublic is bool &&
+        data.createdAt is timestamp &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidUser(data) {
+      return data is map &&
+        data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'displayName', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.uid == request.auth.uid &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.email == request.auth.token.email &&
+        data.displayName is string && data.displayName.size() <= 120 &&
+        data.createdAt is timestamp &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidRepoClaim(data) {
+      return data is map &&
+        data.keys().hasAll(['id', 'repoSlug', 'ownerUid', 'auditId', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'repoSlug', 'ownerUid', 'auditId', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.id.size() >= 4 &&
+        data.repoSlug is string && data.repoSlug.size() >= 3 && data.repoSlug.size() <= 140 &&
+        data.repoSlug.matches('^[a-zA-Z0-9_.\\-]+\\/[a-zA-Z0-9_.\\-]+$') &&
+        isValidId(data.ownerUid) &&
+        data.ownerUid == request.auth.uid &&
+        isValidId(data.auditId) &&
+        data.auditId.size() >= 4 &&
+        data.createdAt is timestamp;
+    }
+
+    // Collection 1: Tamper-evident audit receipts
+    match /audits/{auditId} {
+      allow get: if isValidId(auditId) && (
+        existing().isPublic == true ||
+        (isSignedIn() && existing().authorUid == request.auth.uid)
+      );
+
+      allow list: if existing().isPublic == true ||
+        (isSignedIn() && existing().authorUid == request.auth.uid);
+
+      allow create: if isVerifiedUser() &&
+        isValidId(auditId) &&
+        isValidAudit(incoming()) &&
+        incoming().id == auditId &&
+        incoming().authorUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        (!('updatedAt' in incoming()));
+
+      allow update: if isVerifiedUser() &&
+        isValidId(auditId) &&
+        isValidAudit(incoming()) &&
+        existing().authorUid == request.auth.uid &&
+        incoming().authorUid == existing().authorUid &&
+        incoming().id == existing().id &&
+        incoming().bundleHash == existing().bundleHash &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'updatedAt']);
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(auditId) &&
+        existing().authorUid == request.auth.uid;
+    }
+
+    // Collection 2: Owner-isolated user profiles (PII)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidUser(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        (!('updatedAt' in incoming()));
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidUser(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']);
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(userId) &&
+        request.auth.uid == userId;
+    }
+
+    // Collection 3: Repository ownership claims referencing verified audits
+    match /repoClaims/{claimId} {
+      allow get: if isSignedIn() && isValidId(claimId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerUid == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(claimId) &&
+        isValidRepoClaim(incoming()) &&
+        incoming().id == claimId &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/audits/$(incoming().auditId));
+
+      allow update: if false;
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(claimId) &&
+        existing().ownerUid == request.auth.uid;
+    }
+  }
+}
